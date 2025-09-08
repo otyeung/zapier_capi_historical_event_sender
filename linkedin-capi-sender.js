@@ -13,6 +13,8 @@ class LinkedInCAPISender {
     this.conversionId = ''
     this.maxApiCallsPerMinute = 60 // API calls per minute (default 60)
     this.eventsPerBatch = 100 // Events per batch (default 100)
+    this.useConversionTime = false // Whether to use conversionTime from CSV
+    this.debugConversionTime = 0 // Counter for debug logging
     this.csvFile = ''
     this.csvData = []
     this.totalRecords = 0
@@ -169,6 +171,91 @@ class LinkedInCAPISender {
     }
   }
 
+  // Get conversionTime configuration from user
+  getConversionTimeConfiguration() {
+    console.log('\n=== Conversion Time Configuration ===')
+
+    const useConversionTimeInput = readline.question(
+      'Do you want to use conversionTime from CSV if available? (y/n): '
+    )
+
+    if (
+      useConversionTimeInput.toLowerCase() === 'y' ||
+      useConversionTimeInput.toLowerCase() === 'yes'
+    ) {
+      this.useConversionTime = true
+      console.log(
+        '✅ Will use conversionTime from CSV when available (within last 90 days)'
+      )
+      console.log(
+        '💡 Falls back to current timestamp if conversionTime is missing or invalid'
+      )
+    } else {
+      this.useConversionTime = false
+      console.log('✅ Will use current timestamp for all conversion events')
+    }
+  }
+
+  // Check if CSV has conversionTime column and ask user if they want to use it
+  getConversionTimeConfigurationIfAvailable() {
+    // Check if CSV has conversionTime column
+    if (
+      this.csvData.length > 0 &&
+      this.csvData[0].hasOwnProperty('conversionTime')
+    ) {
+      console.log('\n=== Conversion Time Configuration ===')
+      console.log('💡 Found conversionTime column in CSV file')
+
+      // Show a sample of the conversionTime values
+      const sampleTimes = this.csvData.slice(0, 3).map((record) => {
+        if (record.conversionTime) {
+          const date = new Date(parseInt(record.conversionTime))
+          return `   • ${date.toISOString()}`
+        }
+        return '   • (empty)'
+      })
+      console.log('📋 Sample conversionTime values:')
+      console.log(sampleTimes.join('\n'))
+
+      const useConversionTimeInput = readline.question(
+        '\nDo you want to use conversionTime from CSV? (y/n): '
+      )
+
+      if (
+        useConversionTimeInput.toLowerCase() === 'y' ||
+        useConversionTimeInput.toLowerCase() === 'yes'
+      ) {
+        this.useConversionTime = true
+        console.log(
+          '✅ Will use conversionTime from CSV when available (within last 90 days)'
+        )
+        console.log(
+          '💡 Falls back to current timestamp if conversionTime is missing or invalid'
+        )
+      } else {
+        this.useConversionTime = false
+        console.log('✅ Will use current timestamp for all conversion events')
+      }
+    } else {
+      console.log('\n=== Conversion Time Configuration ===')
+      console.log('⚠️  No conversionTime column found in CSV file')
+      console.log('✅ Will use current timestamp for all conversion events')
+      this.useConversionTime = false
+    }
+  }
+
+  // Validate if timestamp is within last 90 days
+  isValidConversionTime(timestamp) {
+    if (!timestamp || isNaN(timestamp)) {
+      return false
+    }
+
+    const now = Date.now()
+    const ninetyDaysAgo = now - 90 * 24 * 60 * 60 * 1000 // 90 days in milliseconds
+
+    return timestamp >= ninetyDaysAgo && timestamp <= now
+  }
+
   // Browse and select CSV file
   selectCsvFile() {
     console.log('\n=== CSV File Selection ===')
@@ -281,12 +368,42 @@ class LinkedInCAPISender {
 
   // Construct single LinkedIn CAPI event
   constructLinkedInEvent(record) {
-    const currentTimestamp = Date.now()
+    let conversionTimestamp = Date.now() // Default to current timestamp
+    let timeSource = 'current'
+
+    // Check if user wants to use conversionTime from CSV
+    if (this.useConversionTime && record.conversionTime) {
+      const csvTimestamp = parseInt(record.conversionTime)
+
+      if (this.isValidConversionTime(csvTimestamp)) {
+        conversionTimestamp = csvTimestamp
+        timeSource = 'csv'
+      } else {
+        // Log warning for invalid timestamp but continue with current time
+        const daysAgo = Math.floor(
+          (Date.now() - csvTimestamp) / (1000 * 60 * 60 * 24)
+        )
+        console.log(
+          `⚠️  Invalid conversionTime for email ${record.email}: ${new Date(
+            csvTimestamp
+          ).toISOString()} (${daysAgo} days ago). Using current timestamp.`
+        )
+      }
+    }
+
+    // Log timestamp source for debugging (only for first few records to avoid spam)
+    if (this.debugConversionTime < 3) {
+      const timeStr = new Date(conversionTimestamp).toISOString()
+      console.log(
+        `🕒 Conversion time for ${record.email}: ${timeStr} (source: ${timeSource})`
+      )
+      this.debugConversionTime++
+    }
 
     // Build the base event object
     const event = {
       conversion: `urn:lla:llaPartnerConversion:${this.conversionId}`,
-      conversionHappenedAt: currentTimestamp,
+      conversionHappenedAt: conversionTimestamp,
       user: {
         userIds: [
           {
@@ -1234,6 +1351,7 @@ class LinkedInCAPISender {
       this.getBatchConfigurationFromUser()
       this.selectCsvFile()
       this.parseCsvFile()
+      this.getConversionTimeConfigurationIfAvailable()
       await this.sendAllRecords()
 
       console.log('\n🎉 Process completed!')

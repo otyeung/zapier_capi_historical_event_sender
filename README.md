@@ -27,6 +27,7 @@ A comprehensive Node.js application that generates fake CSV data using the Faker
 - **LinkedIn API Configuration**: Support for different LinkedIn API versions (YYYYMM format)
 - **Secure Authentication**: Access token management for LinkedIn API
 - **Conversion Tracking**: Configurable conversion ID for event tracking
+- **Historical Conversion Time**: Optional support for historical conversion timestamps (within last 90 days)
 - **Email Hashing**: Automatic SHA-256 hashing of email addresses for privacy
 - **High-Volume Processing**: Rate limiting (100-600 RPM) for bulk conversions
 - **Concurrent Request Processing**: Optimized batch sending with 10 concurrent requests per batch
@@ -44,6 +45,7 @@ A comprehensive Node.js application that generates fake CSV data using the Faker
 6. **countryCode** - Country code (e.g., US, UK) (optional)
 7. **currencyCode** - Currency code (e.g., USD, EUR) (optional)
 8. **conversionValue** - Conversion value (numeric 1-1000) (optional)
+9. **conversionTime** - Conversion time (epoch milliseconds, last 90 days) (optional)
 
 ## Prerequisites
 
@@ -368,6 +370,30 @@ Each CSV record is converted to LinkedIn CAPI format:
 }
 ```
 
+### ConversionTime Feature
+
+The LinkedIn CAPI sender now supports using historical conversion timestamps from your CSV data:
+
+**Configuration Options:**
+
+- **Use conversionTime from CSV**: Choose whether to use the `conversionTime` column from your CSV file
+- **Automatic validation**: Timestamps are validated to be within the last 90 days
+- **Fallback to current time**: Invalid or missing timestamps automatically fall back to current time
+
+**Benefits:**
+
+- Send historical conversion events with accurate timestamps
+- Maintain chronological accuracy for conversion attribution
+- Automatically handles edge cases with proper fallbacks
+
+**Example with conversionTime:**
+
+```csv
+email,firstName,conversionTime
+john@example.com,John,1757200000000
+jane@example.com,Jane,1757100000000
+```
+
 ### Example LinkedIn CAPI Usage
 
 ```bash
@@ -392,6 +418,11 @@ Enter conversion ID: 123456
 === Rate Limiting Configuration ===
 Use default rate limit (550 requests per minute)? (y/n): y
 ✅ Rate limit set: 550 requests per minute
+
+=== Conversion Time Configuration ===
+Do you want to use conversionTime from CSV if available? (y/n): y
+✅ Will use conversionTime from CSV when available (within last 90 days)
+💡 Falls back to current timestamp if conversionTime is missing or invalid
 
 === CSV File Selection ===
 Available CSV files:

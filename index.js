@@ -35,6 +35,11 @@ const availableFields = {
     description: 'Conversion value (numeric)',
     mandatory: false,
   },
+  conversionTime: {
+    name: 'conversionTime',
+    description: 'Conversion time (epoch milliseconds, last 90 days)',
+    mandatory: false,
+  },
 }
 
 // Function to display field selection menu
@@ -100,6 +105,11 @@ function generateFieldData(fieldName) {
       return faker.finance.currencyCode()
     case 'conversionValue':
       return faker.number.float({ min: 1, max: 1000, fractionDigits: 2 })
+    case 'conversionTime':
+      // Generate random epoch time in milliseconds within last 90 days
+      const now = Date.now()
+      const ninetyDaysAgo = now - 90 * 24 * 60 * 60 * 1000 // 90 days in milliseconds
+      return faker.number.int({ min: ninetyDaysAgo, max: now })
     default:
       return ''
   }
