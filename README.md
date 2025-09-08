@@ -47,17 +47,47 @@ A comprehensive Node.js application that generates fake CSV data using the Faker
 
 ## Prerequisites
 
-- Node.js (version 14 or higher)
+- Node.js (version 18 or higher)
 - npm (Node Package Manager)
+
+### Assumptions
+
+- You have created Zapier CAPI conversion connecting to your CRM (e.g. Salesforce) and the Zap is already live
+- You need to send historical CAPI event (potentially 100k events) one-off to the same conversion, Zapier does not officially support sending historical events and there is a (restrictive API limit)[https://help.zapier.com/hc/en-us/articles/8496181445261-Zap-limits] for free plan (~20 request per minute)
+
+### Two solutions:
+
+- **Send batch events to Zapier webhook** subject to 20 request per minute constraints (Go to "Sending Data to Webhook" section)
+  ![image](image/zapier_webhook.jpg)
+- **Send batch events directly to LinkedIn** with much higher rate ~ 5,000 events per minute (Go to "Sending Data to LinkedIn CAPI" section)
+
+### Benefits of Send batch events directly to LinkedIn:
+
+1. **Fill up the gap** of NOT able to send historical CAPI events even it's just one-off
+2. **No Zapier API limit** - bypass the restrictive API limits
+3. **Unified conversion tracking** - The Historical CAPI events are sent to same Zapier conversion ID, therefore you can have conversion report combined with live conversion events, create match audience, predictive audience, and do ads optimization
+
+**Note:** "Generating Fake Data" is meant for dry-run using valid fake data
+
+### For LinkedIn CAPI Integration
+
+1. **Create CAPI conversion in LinkedIn Campaign Manager** connecting to your CRM source via Zapier, make sure choose "Zapier" as data source
+   ![image](image/CMT_CAPI_Conversion.jpg)
+2. **Copy the conversion ID** of this conversion
+   ![image](image/CMT_conversion_id.jpg)
+3. **Copy the access token** via [LinkedIn Campaign Manager](https://www.linkedin.com/help/lms/answer/a1711116) or [LinkedIn Developer Console](https://www.linkedin.com/developers/tools/oauth/token-generator)
 
 ## Installation
 
-1. Clone or download the project files
-2. Navigate to the project directory:
+1. **Clone the repository:**
+   ```bash
+   git clone git@github.com:otyeung/zapier_capi_historical_event_sender.git
+   ```
+2. **Navigate to the project directory:**
    ```bash
    cd zapier_capi_historical_event_sender
    ```
-3. Install dependencies:
+3. **Install dependencies:**
    ```bash
    npm install
    ```
