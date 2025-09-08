@@ -1,0 +1,47 @@
+{
+  "name": "zapier-capi-historical-event-sender",
+  "version": "1.0.0",
+  "description": "A comprehensive Node.js application that generates fake CSV data using the Faker.js library and sends the data to various endpoints including webhook URLs (like Zapier) and LinkedIn Conversions API (CAPI) with configurable rate limiting.",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "generate": "node index.js",
+    "send": "node webhook-sender.js",
+    "webhook": "node webhook-sender.js",
+    "linkedin": "node linkedin-capi-sender.js",
+    "capi": "node linkedin-capi-sender.js",
+    "example": "node example.js",
+    "simple": "node simple-example.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "faker",
+    "csv",
+    "webhook",
+    "zapier",
+    "linkedin",
+    "capi",
+    "conversions-api",
+    "data-generator",
+    "historical-events",
+    "bulk-sender"
+  ],
+  "author": "Your Name",
+  "license": "MIT",
+  "dependencies": {
+    "@faker-js/faker": "^8.4.1",
+    "axios": "^1.7.7",
+    "readline-sync": "^1.4.10"
+  },
+  "engines": {
+    "node": ">=14.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yourusername/zapier-capi-historical-event-sender.git"
+  },
+  "bugs": {
+    "url": "https://github.com/yourusername/zapier-capi-historical-event-sender/issues"
+  },
+  "homepage": "https://github.com/yourusername/zapier-capi-historical-event-sender#readme"
+}
