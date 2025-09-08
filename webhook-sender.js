@@ -189,12 +189,12 @@ class WebhookSender {
   // Construct JSON payload for webhook - dynamically includes all CSV fields
   constructPayload(record) {
     const payload = {}
-    
+
     // Dynamically add all fields from the CSV record
     for (const [key, value] of Object.entries(record)) {
       payload[key] = value || ''
     }
-    
+
     return payload
   }
 
@@ -203,9 +203,12 @@ class WebhookSender {
     try {
       // Debug: Log the first few payloads to verify structure
       if (recordIndex < 3) {
-        console.log(`🔍 Payload for record ${recordIndex + 1}:`, JSON.stringify(payload, null, 2))
+        console.log(
+          `🔍 Payload for record ${recordIndex + 1}:`,
+          JSON.stringify(payload, null, 2)
+        )
       }
-      
+
       const response = await axios.post(this.webhookUrl, payload, {
         headers: {
           'Content-Type': 'application/json',
