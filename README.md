@@ -35,6 +35,15 @@ A comprehensive Node.js application that generates fake CSV data using the Faker
 - **Detailed Analytics**: Comprehensive API response statistics and error reporting
 - **CAPI Compliance**: Full LinkedIn Conversions API specification compliance
 
+### Data Validation & Quality Control
+
+- **Email Validation**: Ensures every record has a valid email address before processing
+- **User Information Rules**: Enforces LinkedIn CAPI requirement that firstName and lastName must be present when sending any user information (title, company, country)
+- **Historical Timestamp Management**: Interactive handling of conversion timestamps older than 90 days with options to reset or skip
+- **Smart Record Filtering**: Automatically excludes invalid records with detailed explanations
+- **Real-time Validation Feedback**: Shows exactly why records are skipped during processing
+- **Comprehensive Reporting**: Detailed summary of sent, failed, and skipped records with success rates
+
 ## Available Data Fields
 
 1. **email** - Email address (mandatory)
@@ -46,6 +55,170 @@ A comprehensive Node.js application that generates fake CSV data using the Faker
 7. **currencyCode** - Currency code (e.g., USD, EUR) (optional)
 8. **conversionValue** - Conversion value (numeric 1-1000) (optional)
 9. **conversionTime** - Conversion time (epoch milliseconds, last 90 days) (optional)
+
+## SFDC (Salesforce) Compatibility
+
+This application now includes enhanced support for CSV files exported from Salesforce CRM via SFDC Workbench:
+
+### Automatic Data Cleaning
+
+- **Quote Removal**: Automatically strips surrounding quotes from field values (e.g., `"John Doe"` → `John Doe`)
+- **Empty Value Handling**: Converts `"[not provided]"` to empty strings and excludes from payloads
+- **ISO-8601 Conversion**: Automatically detects and converts ISO-8601 timestamps to epoch milliseconds
+  - Example: `"2025-07-24T20:44:52.000Z"` → `1753389892000`
+
+### Smart Field Filtering
+
+- **LinkedIn CAPI**: Only includes fields with actual values in the event payload
+- **Webhook Sender**: Excludes empty fields from JSON payload to reduce data size
+- **Validation**: Ensures `conversionTime` values are within the last 90 days for LinkedIn CAPI compliance
+
+### Data Validation and Quality Assurance
+
+Both LinkedIn CAPI and Webhook senders include comprehensive validation logic to ensure data quality:
+
+#### Required Field Validation
+
+- **Email Requirement**: Every record must have a valid email address (assuming CRM data source)
+  - Records without email are completely skipped
+- **User Information Validation**: If any user information fields (title, companyName, countryCode) are provided, both firstName and lastName must be present
+  - **Smart Field Exclusion**: When user information is incomplete (missing firstName/lastName), only the user information fields are excluded from the record
+  - **Record Preservation**: The record is still sent with email and other valid fields (currencyCode, conversionValue, etc.)
+  - **Clear Messaging**: Detailed warning explains which fields were excluded and why
+
+#### Timestamp Handling for Historical Data
+
+- **90-Day Rule**: LinkedIn CAPI requires conversion events to be within the last 90 days
+- **Interactive Configuration**: When `conversionTime` is found in CSV, the application asks:
+  - Whether to include conversion timestamps from CSV
+  - For timestamps older than 90 days: Reset to current time or skip the event
+- **Automatic Processing**:
+  - If "reset" is chosen: Old timestamps are automatically updated to current time
+  - If "skip" is chosen: Events with old timestamps are excluded with detailed explanations
+
+#### Currency Data Validation
+
+- **Paired Field Requirement**: `currencyCode` and `conversionValue` must both be present and valid, or both are ignored
+- **Currency Code Format**: Must be a 3-character ISO currency code (e.g., USD, EUR, GBP)
+- **Conversion Value Format**: Must be a valid number greater than or equal to zero
+- **Smart Handling**:
+  - If only one field is provided, both fields are ignored with a warning message
+  - If currency code format is invalid, both fields are ignored
+  - If conversion value is not a valid number or negative, both fields are ignored
+  - Warnings are shown during processing but don't cause record rejection
+
+#### Validation Reporting
+
+- **Real-time Feedback**: Invalid records are skipped with clear explanations of why they failed validation
+- **Comprehensive Summary**: Final report shows:
+  - Successfully sent records
+  - Failed records (with error details)
+  - Skipped records (with validation reasons)
+  - Overall success rate and processing statistics
+
+### Supported SFDC Export Formats
+
+Both Lead and Opportunity exports are supported with proper field mapping as described in the Data Preparation section.
+
+## Data Preparation - How to export data from SFDC CRM to CSV file
+
+Follow these steps to export data from Salesforce CRM and prepare it for use with this application:
+
+### 1. Open SFDC Workbench
+
+Navigate to [https://workbench.developerforce.com/login.php](https://workbench.developerforce.com/login.php)
+
+- Select your environment
+- Choose API version
+- Login with your Salesforce credentials
+
+  ![image](image/login_sfdc_workbench.jpg)
+
+### 2. Paste your Salesforce SOQL query
+
+#### Lead Table example
+
+```sql
+SELECT
+    Email,              -- Lead's email address
+    FirstName,          -- Lead's first name
+    LastName,           -- Lead's last name
+    Title,              -- Lead's job title
+    Company,            -- Company the lead is associated with
+    CountryCode__c,     -- Custom field: country code of the lead
+    LastModifiedDate    -- Last date/time the lead record was updated
+FROM
+    Lead                -- Lead object
+```
+
+**Note:** You can modify the above as appropriate. `LastModifiedDate` will export in ISO-8601 date time format.
+
+![image](image/Workbench__SOQL_Query_Lead.jpg)
+
+#### Opportunity Table example
+
+```sql
+SELECT
+    ContactEmail__c,        -- Custom field: Contact's email address related to the opportunity
+    ContactFirstName__c,    -- Custom field: Contact's first name
+    ContactLastName__c,     -- Custom field: Contact's last name
+    ContactTitle__c,        -- Custom field: Contact's job title
+    ContactAccountName__c,  -- Custom field: Contact's account/company name
+    ContactCountryCode__c,  -- Custom field: Contact's country code
+    CurrencyIsoCode,        -- ISO currency code (e.g., USD, EUR) for the Amount field
+    Amount,                 -- Opportunity amount (in the specified currency)
+    LastModifiedDate        -- Last date/time the opportunity record was updated
+FROM
+    Opportunity             -- Opportunity object
+```
+
+**Note:** You can modify the above as appropriate. You need to "Activate Multiple Currencies" for your org in SFDC CRM to support currency ISO code.
+
+![image](image/Workbench__SOQL_Query_Opportunity.jpg)
+
+### 3. Download the CSV file in SFDC Workbench
+
+Execute your query and download the resulting CSV file.
+
+Download the CSV file for Lead Query
+![image](image/Workbench__Bulk_API_Job_Status_Lead.jpg)
+
+Download the CSV file for Opportunity Query
+![image](image/Workbench__Bulk_API_Job_Status_Opportunity.jpg)
+
+### 4. Copy CSV files to current app directory
+
+Move the downloaded CSV file to the directory where this application is located.
+
+### 5. Replace the header row (1st row) in CSV with appropriate header labels
+
+#### Lead CSV file
+
+Replace the header row:
+
+```
+"Email","FirstName","LastName","Title","Company","CountryCode__c","LastModifiedDate"
+```
+
+with:
+
+```
+email,firstName,lastName,title,companyName,countryCode,conversionTime
+```
+
+#### Opportunity CSV file
+
+Replace the header row:
+
+```
+"ContactEmail__c","ContactFirstName__c","ContactLastName__c","ContactTitle__c","ContactAccountName__c","ContactCountryCode__c","CurrencyIsoCode","Amount","LastModifiedDate"
+```
+
+with:
+
+```
+email,firstName,lastName,title,companyName,countryCode,currencyCode,conversionValue,conversionTime
+```
 
 ## Prerequisites
 
@@ -226,12 +399,22 @@ To view the generated data, you can:
    - CSV file is parsed and validated
    - First row is treated as headers
    - Records are converted to JSON format
+   - **Conversion Time Configuration** (if conversionTime column found):
+     - Option to include conversionTime in webhook payload
+     - For timestamps older than 90 days: Choose to reset to current time or skip events
+   - **Data Validation** applied to each record:
+     - Email field is required for all records (records without email are completely skipped)
+     - User information validation: If any user info (title, company, country) is present, firstName and lastName are required
+       - **Smart handling**: If incomplete, only user info fields are excluded; record is still sent with email and other valid fields
+     - Currency data validation: Both `currencyCode` (3-char ISO) and `conversionValue` (number ≥ 0) must be valid or both are ignored
+     - Records are processed with detailed warnings for excluded fields
 
 5. **Sending Process**:
-   - Real-time progress display
-   - Success/error tracking
+   - Real-time progress display with validation feedback
+   - Success/error/skipped record tracking
    - Rate limiting enforcement
-   - Comprehensive error logging
+   - Comprehensive error and validation logging
+   - Final summary includes sent, failed, and skipped counts
 
 ### Webhook JSON Format
 
@@ -333,12 +516,22 @@ Proceed with sending? (y/n): y
    - Browse all CSV files in the current directory
    - Files are displayed with their sizes
    - CSV parsing with header validation
+   - **Conversion Time Configuration** (if conversionTime column found):
+     - Option to use conversionTime from CSV for historical events
+     - For timestamps older than 90 days: Choose to reset to current time or skip events
+   - **Data Validation** applied to each record:
+     - Email field is required for all records (records without email are completely skipped)
+     - User information validation: If any user info (title, company, country) is present, firstName and lastName are required
+       - **Smart handling**: If incomplete, only user info fields are excluded; record is still sent with email and other valid fields
+     - Currency data validation: Both `currencyCode` (3-char ISO) and `conversionValue` (number ≥ 0) must be valid or both are ignored
+     - Records are processed with detailed warnings for excluded fields
 
 6. **Data Processing & Sending**:
    - Automatic email hashing with SHA-256
-   - Current timestamp generation for conversion events
-   - Real-time progress monitoring
-   - Comprehensive error tracking and API statistics
+   - Smart timestamp handling (CSV historical or current time)
+   - Real-time progress monitoring with validation feedback
+   - Comprehensive error tracking, API statistics, and skipped record reporting
+   - Final summary includes sent, failed, and skipped counts with detailed breakdowns
 
 ### LinkedIn CAPI JSON Format
 
@@ -372,19 +565,30 @@ Each CSV record is converted to LinkedIn CAPI format:
 
 ### ConversionTime Feature
 
-The LinkedIn CAPI sender now supports using historical conversion timestamps from your CSV data:
+The LinkedIn CAPI sender now supports comprehensive handling of historical conversion timestamps from your CSV data:
 
 **Configuration Options:**
 
 - **Use conversionTime from CSV**: Choose whether to use the `conversionTime` column from your CSV file
-- **Automatic validation**: Timestamps are validated to be within the last 90 days
-- **Fallback to current time**: Invalid or missing timestamps automatically fall back to current time
+- **Historical Timestamp Handling**: For timestamps older than 90 days, you can:
+  - **Reset to current time**: Automatically update old timestamps to current time
+  - **Skip events**: Exclude events with old timestamps (with detailed explanations)
+- **Automatic validation**: All timestamps are validated to be within LinkedIn CAPI requirements
+- **Fallback handling**: Invalid or missing timestamps automatically fall back to current time
+
+**Data Quality Assurance:**
+
+- **Email validation**: Every record must have a valid email address
+- **User information rules**: If any user data (title, company, country) is present, both firstName and lastName must be included
+- **Real-time feedback**: Invalid records are skipped with clear explanations of validation failures
+- **Comprehensive reporting**: Final summary shows sent, failed, and skipped records with success rates
 
 **Benefits:**
 
 - Send historical conversion events with accurate timestamps
 - Maintain chronological accuracy for conversion attribution
-- Automatically handles edge cases with proper fallbacks
+- Ensure data quality with comprehensive validation
+- Handle edge cases gracefully with proper fallbacks and user choice
 
 **Example with conversionTime:**
 

@@ -14,6 +14,7 @@ class LinkedInCAPISender {
     this.maxApiCallsPerMinute = 60 // API calls per minute (default 60)
     this.eventsPerBatch = 100 // Events per batch (default 100)
     this.useConversionTime = false // Whether to use conversionTime from CSV
+    this.resetOldTimestamps = false // Whether to reset timestamps older than 90 days
     this.debugConversionTime = 0 // Counter for debug logging
     this.csvFile = ''
     this.csvData = []
@@ -229,6 +230,26 @@ class LinkedInCAPISender {
         console.log(
           '✅ Will use conversionTime from CSV when available (within last 90 days)'
         )
+
+        // Ask about handling old timestamps
+        console.log(
+          '\n💡 LinkedIn CAPI only accepts timestamps within the last 90 days'
+        )
+        const resetOldInput = readline.question(
+          'Reset timestamps older than 90 days to current time? (y/n): '
+        )
+
+        if (
+          resetOldInput.toLowerCase() === 'y' ||
+          resetOldInput.toLowerCase() === 'yes'
+        ) {
+          this.resetOldTimestamps = true
+          console.log('✅ Will reset old timestamps to current time')
+        } else {
+          this.resetOldTimestamps = false
+          console.log('✅ Will skip events with timestamps older than 90 days')
+        }
+
         console.log(
           '💡 Falls back to current timestamp if conversionTime is missing or invalid'
         )
@@ -320,7 +341,21 @@ class LinkedInCAPISender {
         if (values.length === headers.length) {
           const record = {}
           headers.forEach((header, index) => {
-            record[header] = values[index].trim()
+            let value = values[index].trim()
+
+            // Clean SFDC-specific formatting
+            value = this.cleanSfdcValue(value)
+
+            // Convert ISO-8601 to epoch for conversionTime field
+            if (
+              header === 'conversionTime' &&
+              value &&
+              this.isIso8601Date(value)
+            ) {
+              value = this.convertIso8601ToEpoch(value)
+            }
+
+            record[header] = value
           })
           this.csvData.push(record)
         }
@@ -361,13 +396,193 @@ class LinkedInCAPISender {
     return result
   }
 
+  // Clean SFDC-specific value formatting
+  cleanSfdcValue(value) {
+    // Remove surrounding quotes if present
+    if (value.startsWith('"') && value.endsWith('"')) {
+      value = value.slice(1, -1)
+    }
+
+    // Convert "[not provided]" to empty string
+    if (value === '[not provided]') {
+      value = ''
+    }
+
+    // Handle escaped quotes within the value
+    value = value.replace(/""/g, '"')
+
+    return value
+  }
+
+  // Check if a string is in ISO-8601 date format
+  isIso8601Date(dateString) {
+    const iso8601Regex = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{3})?Z$/
+    return iso8601Regex.test(dateString)
+  }
+
+  // Convert ISO-8601 date string to epoch milliseconds
+  convertIso8601ToEpoch(iso8601String) {
+    try {
+      const date = new Date(iso8601String)
+      if (isNaN(date.getTime())) {
+        console.log(`⚠️  Invalid ISO-8601 date format: ${iso8601String}`)
+        return ''
+      }
+      return date.getTime().toString()
+    } catch (error) {
+      console.log(
+        `⚠️  Error converting date ${iso8601String}: ${error.message}`
+      )
+      return ''
+    }
+  }
+
+  // Validate currency code and conversion value pair
+  validateCurrencyData(record) {
+    const hasCurrencyCode =
+      record.currencyCode && record.currencyCode.trim() !== ''
+    const hasConversionValue =
+      record.conversionValue && record.conversionValue.trim() !== ''
+
+    // If neither field is provided, that's fine - both will be ignored
+    if (!hasCurrencyCode && !hasConversionValue) {
+      return { valid: true, shouldInclude: false }
+    }
+
+    // If only one field is provided, ignore both
+    if (!hasCurrencyCode || !hasConversionValue) {
+      return {
+        valid: true,
+        shouldInclude: false,
+        warning:
+          'Currency data incomplete - both currencyCode and conversionValue required, ignoring both fields',
+      }
+    }
+
+    // Validate currency code format (3-character ISO code)
+    const currencyCode = record.currencyCode.trim().toUpperCase()
+    if (!/^[A-Z]{3}$/.test(currencyCode)) {
+      return {
+        valid: true,
+        shouldInclude: false,
+        warning:
+          'Invalid currencyCode format - must be 3-character ISO code, ignoring currency data',
+      }
+    }
+
+    // Validate conversion value (must be a number >= 0)
+    const conversionValue = parseFloat(record.conversionValue)
+    if (isNaN(conversionValue) || conversionValue < 0) {
+      return {
+        valid: true,
+        shouldInclude: false,
+        warning:
+          'Invalid conversionValue - must be a number >= 0, ignoring currency data',
+      }
+    }
+
+    return { valid: true, shouldInclude: true, currencyCode, conversionValue }
+  }
+
+  // Validate user information fields
+  validateUserInfo(record) {
+    const userInfoFields = ['title', 'companyName', 'countryCode']
+    const hasUserInfo = userInfoFields.some(
+      (field) => record[field] && record[field].trim() !== ''
+    )
+
+    if (!hasUserInfo) {
+      return { valid: true, includeUserInfo: false }
+    }
+
+    const hasFirstName = record.firstName && record.firstName.trim() !== ''
+    const hasLastName = record.lastName && record.lastName.trim() !== ''
+
+    if (hasFirstName && hasLastName) {
+      return { valid: true, includeUserInfo: true }
+    }
+
+    // User info present but missing required firstName/lastName
+    const missingFields = []
+    if (!hasFirstName) missingFields.push('firstName')
+    if (!hasLastName) missingFields.push('lastName')
+
+    return {
+      valid: true,
+      includeUserInfo: false,
+      warning: `User information detected but missing required fields (${missingFields.join(
+        ', '
+      )}). Excluding all user information fields (firstName, lastName, title, companyName, countryCode) from this record.`,
+    }
+  }
+
+  // Validate event data before sending
+  validateEventData(record, index) {
+    const errors = []
+    const warnings = []
+
+    // 1. Must have email (assuming data source is CRM)
+    if (!record.email || record.email.trim() === '') {
+      errors.push('Missing required email field')
+    }
+
+    // 2. Validate user information
+    const userInfoValidation = this.validateUserInfo(record)
+    if (userInfoValidation.warning) {
+      warnings.push(userInfoValidation.warning)
+    }
+
+    // 3. Check conversion time if using CSV timestamps and not resetting old ones
+    if (
+      this.useConversionTime &&
+      !this.resetOldTimestamps &&
+      record.conversionTime
+    ) {
+      const csvTimestamp = parseInt(record.conversionTime)
+      if (!isNaN(csvTimestamp) && !this.isValidConversionTime(csvTimestamp)) {
+        const daysAgo = Math.floor(
+          (Date.now() - csvTimestamp) / (1000 * 60 * 60 * 24)
+        )
+        errors.push(
+          `ConversionTime is ${daysAgo} days old (beyond 90-day LinkedIn CAPI limit)`
+        )
+      }
+    }
+
+    // 4. Validate currency data
+    const currencyValidation = this.validateCurrencyData(record)
+    if (currencyValidation.warning) {
+      warnings.push(currencyValidation.warning)
+    }
+
+    // Show warnings but don't fail validation
+    if (warnings.length > 0) {
+      console.log(
+        `⚠️  Record ${index + 1} (${
+          record.email || 'no email'
+        }) warnings: ${warnings.join(', ')}`
+      )
+    }
+
+    if (errors.length > 0) {
+      console.log(
+        `⚠️  Skipping record ${index + 1} (${
+          record.email || 'no email'
+        }): ${errors.join(', ')}`
+      )
+      return false
+    }
+
+    return { valid: true, includeUserInfo: userInfoValidation.includeUserInfo }
+  }
+
   // Hash email with SHA-256
   hashEmail(email) {
     return crypto.createHash('sha256').update(email.toLowerCase()).digest('hex')
   }
 
   // Construct single LinkedIn CAPI event
-  constructLinkedInEvent(record) {
+  constructLinkedInEvent(record, includeUserInfo = true) {
     let conversionTimestamp = Date.now() // Default to current timestamp
     let timeSource = 'current'
 
@@ -378,8 +593,24 @@ class LinkedInCAPISender {
       if (this.isValidConversionTime(csvTimestamp)) {
         conversionTimestamp = csvTimestamp
         timeSource = 'csv'
+      } else if (this.resetOldTimestamps) {
+        // Use current time for old timestamps when reset option is enabled
+        conversionTimestamp = Date.now()
+        timeSource = 'current (reset old)'
+
+        // Log reset action for debugging (only for first few records)
+        if (this.debugConversionTime < 3) {
+          const daysAgo = Math.floor(
+            (Date.now() - csvTimestamp) / (1000 * 60 * 60 * 24)
+          )
+          console.log(
+            `🔄 Reset old timestamp for ${record.email}: ${new Date(
+              csvTimestamp
+            ).toISOString()} (${daysAgo} days ago) → current time`
+          )
+        }
       } else {
-        // Log warning for invalid timestamp but continue with current time
+        // This should not happen as validation should catch this, but fallback to current time
         const daysAgo = Math.floor(
           (Date.now() - csvTimestamp) / (1000 * 60 * 60 * 24)
         )
@@ -414,37 +645,37 @@ class LinkedInCAPISender {
       },
     }
 
-    // Only add conversionValue if we have currency or amount data
-    if (record.currencyCode || record.conversionValue) {
-      event.conversionValue = {}
-      if (record.currencyCode) {
-        event.conversionValue.currencyCode = record.currencyCode
-      }
-      if (record.conversionValue) {
-        event.conversionValue.amount = record.conversionValue.toString()
+    // Only add conversionValue if we have valid currency data
+    const currencyValidation = this.validateCurrencyData(record)
+    if (currencyValidation.shouldInclude) {
+      event.conversionValue = {
+        currencyCode: currencyValidation.currencyCode,
+        amount: currencyValidation.conversionValue.toString(),
       }
     }
 
-    // Only add userInfo if we have user information fields
-    const userInfoFields = {
-      firstName: record.firstName,
-      lastName: record.lastName,
-      title: record.title,
-      companyName: record.companyName,
-      countryCode: record.countryCode,
-    }
+    // Only add userInfo if validation allows and we have user information fields
+    if (includeUserInfo) {
+      const userInfoFields = {
+        firstName: record.firstName,
+        lastName: record.lastName,
+        title: record.title,
+        companyName: record.companyName,
+        countryCode: record.countryCode,
+      }
 
-    // Filter out empty/undefined values
-    const filteredUserInfo = Object.entries(userInfoFields)
-      .filter(([key, value]) => value && value.trim() !== '')
-      .reduce((obj, [key, value]) => {
-        obj[key] = value
-        return obj
-      }, {})
+      // Filter out empty/undefined values
+      const filteredUserInfo = Object.entries(userInfoFields)
+        .filter(([key, value]) => value && value.trim() !== '')
+        .reduce((obj, [key, value]) => {
+          obj[key] = value
+          return obj
+        }, {})
 
-    // Only add userInfo if we have any user information
-    if (Object.keys(filteredUserInfo).length > 0) {
-      event.user.userInfo = filteredUserInfo
+      // Only add userInfo if we have any user information
+      if (Object.keys(filteredUserInfo).length > 0) {
+        event.user.userInfo = filteredUserInfo
+      }
     }
 
     return event
@@ -452,12 +683,38 @@ class LinkedInCAPISender {
 
   // Construct LinkedIn CAPI batch payload
   constructBatchPayload(records) {
-    const elements = records.map((record) =>
-      this.constructLinkedInEvent(record)
+    // Filter and validate records before creating events
+    const validRecords = []
+    const skippedCount = records.length
+
+    records.forEach((record, index) => {
+      const validation = this.validateEventData(
+        record,
+        this.sentRecords + index
+      )
+      if (validation.valid) {
+        validRecords.push({
+          record,
+          includeUserInfo: validation.includeUserInfo,
+        })
+      }
+    })
+
+    const actualSkipped = skippedCount - validRecords.length
+    if (actualSkipped > 0) {
+      console.log(
+        `📊 Validation Summary: ${validRecords.length} valid, ${actualSkipped} skipped records in this batch`
+      )
+    }
+
+    const elements = validRecords.map(({ record, includeUserInfo }) =>
+      this.constructLinkedInEvent(record, includeUserInfo)
     )
 
     return {
       elements: elements,
+      validRecordsCount: validRecords.length,
+      skippedRecordsCount: actualSkipped,
     }
   }
 
@@ -465,6 +722,23 @@ class LinkedInCAPISender {
   async sendBatchToLinkedIn(records, batchIndex) {
     const batchStartTime = Date.now()
     const payload = this.constructBatchPayload(records)
+
+    // Skip sending if no valid records in batch
+    if (payload.elements.length === 0) {
+      console.log(
+        `⚠️  Batch ${
+          batchIndex + 1
+        }: No valid records to send, skipping API call`
+      )
+      return {
+        success: true,
+        sentEvents: 0,
+        skippedEvents: payload.skippedRecordsCount,
+        totalEvents: records.length,
+        responseTime: 0,
+        statusCode: 'SKIPPED',
+      }
+    }
 
     // Log request details for debugging
     await this.logApiRequest(batchIndex, payload, records.length)
@@ -550,7 +824,11 @@ class LinkedInCAPISender {
       console.log(
         `✅ Batch ${batchIndex + 1}: ${successfulEvents.length} successful, ${
           failedEvents.length
-        } failed, Time: ${batchDuration}ms`
+        } failed${
+          payload.skippedRecordsCount > 0
+            ? `, ${payload.skippedRecordsCount} skipped`
+            : ''
+        }, Time: ${batchDuration}ms`
       )
 
       if (failedEvents.length > 0) {
@@ -569,6 +847,7 @@ class LinkedInCAPISender {
         batchIndex: batchIndex,
         successfulCount: successfulEvents.length,
         failedCount: failedEvents.length,
+        skippedCount: payload.skippedRecordsCount,
         duration: batchDuration,
         response: response.data,
       }
@@ -607,7 +886,8 @@ class LinkedInCAPISender {
         success: false,
         batchIndex: batchIndex,
         successfulCount: 0,
-        failedCount: records.length,
+        failedCount: payload.validRecordsCount, // Only count valid records as failed
+        skippedCount: payload.skippedRecordsCount,
         duration: batchDuration,
         error: errorMessage,
       }

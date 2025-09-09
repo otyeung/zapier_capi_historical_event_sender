@@ -16,6 +16,8 @@ class WebhookSender {
     this.errors = []
     this.requestQueue = []
     this.isRunning = false
+    this.useConversionTime = false // Whether to use conversionTime from CSV
+    this.resetOldTimestamps = false // Whether to reset timestamps older than 90 days
   }
 
   // Get webhook URL from user
@@ -145,7 +147,21 @@ class WebhookSender {
         if (values.length === headers.length) {
           const record = {}
           headers.forEach((header, index) => {
-            record[header] = values[index].trim()
+            let value = values[index].trim()
+
+            // Clean SFDC-specific formatting
+            value = this.cleanSfdcValue(value)
+
+            // Convert ISO-8601 to epoch for conversionTime field
+            if (
+              header === 'conversionTime' &&
+              value &&
+              this.isIso8601Date(value)
+            ) {
+              value = this.convertIso8601ToEpoch(value)
+            }
+
+            record[header] = value
           })
           this.csvData.push(record)
         }
@@ -186,13 +202,313 @@ class WebhookSender {
     return result
   }
 
+  // Clean SFDC-specific value formatting
+  cleanSfdcValue(value) {
+    // Remove surrounding quotes if present
+    if (value.startsWith('"') && value.endsWith('"')) {
+      value = value.slice(1, -1)
+    }
+
+    // Convert "[not provided]" to empty string
+    if (value === '[not provided]') {
+      value = ''
+    }
+
+    // Handle escaped quotes within the value
+    value = value.replace(/""/g, '"')
+
+    return value
+  }
+
+  // Check if a string is in ISO-8601 date format
+  isIso8601Date(dateString) {
+    const iso8601Regex = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{3})?Z$/
+    return iso8601Regex.test(dateString)
+  }
+
+  // Convert ISO-8601 date string to epoch milliseconds
+  convertIso8601ToEpoch(iso8601String) {
+    try {
+      const date = new Date(iso8601String)
+      if (isNaN(date.getTime())) {
+        console.log(`⚠️  Invalid ISO-8601 date format: ${iso8601String}`)
+        return ''
+      }
+      return date.getTime().toString()
+    } catch (error) {
+      console.log(
+        `⚠️  Error converting date ${iso8601String}: ${error.message}`
+      )
+      return ''
+    }
+  }
+
+  // Check if CSV has conversionTime column and ask user configuration
+  getConversionTimeConfigurationIfAvailable() {
+    // Check if CSV has conversionTime column
+    if (
+      this.csvData.length > 0 &&
+      this.csvData[0].hasOwnProperty('conversionTime')
+    ) {
+      console.log('\n=== Conversion Time Configuration ===')
+      console.log('💡 Found conversionTime column in CSV file')
+
+      // Show a sample of the conversionTime values
+      const sampleTimes = this.csvData.slice(0, 3).map((record) => {
+        if (record.conversionTime) {
+          const date = new Date(parseInt(record.conversionTime))
+          return `   • ${date.toISOString()}`
+        }
+        return '   • (empty)'
+      })
+      console.log('📋 Sample conversionTime values:')
+      console.log(sampleTimes.join('\n'))
+
+      const useConversionTimeInput = readline.question(
+        '\nDo you want to include conversionTime from CSV in webhook payload? (y/n): '
+      )
+
+      if (
+        useConversionTimeInput.toLowerCase() === 'y' ||
+        useConversionTimeInput.toLowerCase() === 'yes'
+      ) {
+        this.useConversionTime = true
+
+        // Ask about handling old timestamps
+        console.log('\n💡 Some timestamps might be older than 90 days')
+        const resetOldInput = readline.question(
+          'Reset timestamps older than 90 days to current time? (y/n): '
+        )
+
+        if (
+          resetOldInput.toLowerCase() === 'y' ||
+          resetOldInput.toLowerCase() === 'yes'
+        ) {
+          this.resetOldTimestamps = true
+          console.log('✅ Will reset old timestamps to current time')
+        } else {
+          this.resetOldTimestamps = false
+          console.log('✅ Will skip events with timestamps older than 90 days')
+        }
+
+        console.log('✅ Will include conversionTime in webhook payload')
+      } else {
+        this.useConversionTime = false
+        console.log('✅ Will exclude conversionTime from webhook payload')
+      }
+    } else {
+      console.log('\n=== Conversion Time Configuration ===')
+      console.log('⚠️  No conversionTime column found in CSV file')
+      this.useConversionTime = false
+    }
+  }
+
+  // Validate if timestamp is within last 90 days
+  isValidConversionTime(timestamp) {
+    if (!timestamp || isNaN(timestamp)) {
+      return false
+    }
+
+    const now = Date.now()
+    const ninetyDaysAgo = now - 90 * 24 * 60 * 60 * 1000 // 90 days in milliseconds
+
+    return timestamp >= ninetyDaysAgo && timestamp <= now
+  }
+
+  // Validate currency code and conversion value pair
+  validateCurrencyData(record) {
+    const hasCurrencyCode =
+      record.currencyCode && record.currencyCode.trim() !== ''
+    const hasConversionValue =
+      record.conversionValue && record.conversionValue.trim() !== ''
+
+    // If neither field is provided, that's fine - both will be ignored
+    if (!hasCurrencyCode && !hasConversionValue) {
+      return { valid: true, shouldInclude: false }
+    }
+
+    // If only one field is provided, ignore both
+    if (!hasCurrencyCode || !hasConversionValue) {
+      return {
+        valid: true,
+        shouldInclude: false,
+        warning:
+          'Currency data incomplete - both currencyCode and conversionValue required, ignoring both fields',
+      }
+    }
+
+    // Validate currency code format (3-character ISO code)
+    const currencyCode = record.currencyCode.trim().toUpperCase()
+    if (!/^[A-Z]{3}$/.test(currencyCode)) {
+      return {
+        valid: true,
+        shouldInclude: false,
+        warning:
+          'Invalid currencyCode format - must be 3-character ISO code, ignoring currency data',
+      }
+    }
+
+    // Validate conversion value (must be a number >= 0)
+    const conversionValue = parseFloat(record.conversionValue)
+    if (isNaN(conversionValue) || conversionValue < 0) {
+      return {
+        valid: true,
+        shouldInclude: false,
+        warning:
+          'Invalid conversionValue - must be a number >= 0, ignoring currency data',
+      }
+    }
+
+    return { valid: true, shouldInclude: true, currencyCode, conversionValue }
+  }
+
+  // Validate user information fields
+  validateUserInfo(record) {
+    const userInfoFields = ['title', 'companyName', 'countryCode']
+    const hasUserInfo = userInfoFields.some(
+      (field) => record[field] && record[field].trim() !== ''
+    )
+
+    if (!hasUserInfo) {
+      return { valid: true, includeUserInfo: false }
+    }
+
+    const hasFirstName = record.firstName && record.firstName.trim() !== ''
+    const hasLastName = record.lastName && record.lastName.trim() !== ''
+
+    if (hasFirstName && hasLastName) {
+      return { valid: true, includeUserInfo: true }
+    }
+
+    // User info present but missing required firstName/lastName
+    const missingFields = []
+    if (!hasFirstName) missingFields.push('firstName')
+    if (!hasLastName) missingFields.push('lastName')
+
+    return {
+      valid: true,
+      includeUserInfo: false,
+      warning: `User information detected but missing required fields (${missingFields.join(
+        ', '
+      )}). Excluding all user information fields (firstName, lastName, title, companyName, countryCode) from this record.`,
+    }
+  }
+
+  // Validate event data before sending
+  validateEventData(record, index) {
+    const errors = []
+    const warnings = []
+
+    // 1. Must have email (assuming data source is CRM)
+    if (!record.email || record.email.trim() === '') {
+      errors.push('Missing required email field')
+    }
+
+    // 2. Validate user information
+    const userInfoValidation = this.validateUserInfo(record)
+    if (userInfoValidation.warning) {
+      warnings.push(userInfoValidation.warning)
+    }
+
+    // 3. Check conversion time if using CSV timestamps and not resetting old ones
+    if (
+      this.useConversionTime &&
+      !this.resetOldTimestamps &&
+      record.conversionTime
+    ) {
+      const csvTimestamp = parseInt(record.conversionTime)
+      if (!isNaN(csvTimestamp) && !this.isValidConversionTime(csvTimestamp)) {
+        const daysAgo = Math.floor(
+          (Date.now() - csvTimestamp) / (1000 * 60 * 60 * 24)
+        )
+        errors.push(
+          `ConversionTime is ${daysAgo} days old (beyond 90-day limit)`
+        )
+      }
+    }
+
+    // 4. Validate currency data
+    const currencyValidation = this.validateCurrencyData(record)
+    if (currencyValidation.warning) {
+      warnings.push(currencyValidation.warning)
+    }
+
+    // Show warnings but don't fail validation
+    if (warnings.length > 0) {
+      console.log(
+        `⚠️  Record ${index + 1} (${
+          record.email || 'no email'
+        }) warnings: ${warnings.join(', ')}`
+      )
+    }
+
+    if (errors.length > 0) {
+      console.log(
+        `⚠️  Skipping record ${index + 1} (${
+          record.email || 'no email'
+        }): ${errors.join(', ')}`
+      )
+      return false
+    }
+
+    return { valid: true, includeUserInfo: userInfoValidation.includeUserInfo }
+  }
+
   // Construct JSON payload for webhook - dynamically includes all CSV fields
-  constructPayload(record) {
+  constructPayload(record, includeUserInfo = true) {
     const payload = {}
 
-    // Dynamically add all fields from the CSV record
+    // Validate currency data and get validated values
+    const currencyValidation = this.validateCurrencyData(record)
+
+    // Define user information fields that should be conditionally included
+    const userInfoFields = [
+      'firstName',
+      'lastName',
+      'title',
+      'companyName',
+      'countryCode',
+    ]
+
+    // Dynamically add all fields from the CSV record, excluding empty values
     for (const [key, value] of Object.entries(record)) {
-      payload[key] = value || ''
+      // Skip user info fields if validation failed
+      if (!includeUserInfo && userInfoFields.includes(key)) {
+        continue
+      }
+
+      // Skip currency fields if validation failed - they'll be handled separately
+      if (
+        (key === 'currencyCode' || key === 'conversionValue') &&
+        !currencyValidation.shouldInclude
+      ) {
+        continue
+      }
+
+      // Handle conversionTime specially if using CSV timestamps and reset option
+      if (key === 'conversionTime' && this.useConversionTime && value) {
+        const csvTimestamp = parseInt(value)
+
+        if (!isNaN(csvTimestamp)) {
+          if (this.isValidConversionTime(csvTimestamp)) {
+            // Use original timestamp if valid
+            payload[key] = value
+          } else if (this.resetOldTimestamps) {
+            // Use current timestamp if resetting old ones
+            payload[key] = Date.now().toString()
+          }
+          // If not resetting and invalid, skip this field (validation should have caught this)
+        }
+      } else if (value && value.trim() !== '') {
+        // Only include fields with actual values (not empty strings)
+        payload[key] = value
+      }
+    }
+
+    // Add validated currency data if available
+    if (currencyValidation.shouldInclude) {
+      payload.currencyCode = currencyValidation.currencyCode
+      payload.conversionValue = currencyValidation.conversionValue.toString()
     }
 
     return payload
@@ -269,6 +585,7 @@ class WebhookSender {
 
     this.isRunning = true
     const startTime = Date.now()
+    let skippedRecords = 0
 
     // Calculate delay between requests (in milliseconds)
     const delayBetweenRequests = (60 * 1000) / this.maxRequestsPerMinute
@@ -279,7 +596,15 @@ class WebhookSender {
       if (!this.isRunning) break
 
       const record = this.csvData[i]
-      const payload = this.constructPayload(record)
+
+      // Validate record before sending
+      const validation = this.validateEventData(record, i)
+      if (!validation.valid) {
+        skippedRecords++
+        continue
+      }
+
+      const payload = this.constructPayload(record, validation.includeUserInfo)
 
       await this.sendWebhookRequest(payload, i)
       this.displayProgress()
@@ -292,16 +617,19 @@ class WebhookSender {
 
     const endTime = Date.now()
     const totalTime = ((endTime - startTime) / 1000 / 60).toFixed(2)
+    const processedRecords = this.sentRecords + this.errors.length
 
     console.log('\n\n=== Sending Complete ===')
     console.log(`✅ Successfully sent: ${this.sentRecords} records`)
     console.log(`❌ Failed to send: ${this.errors.length} records`)
+    console.log(`⚠️  Skipped (validation): ${skippedRecords} records`)
     console.log(`⏱️  Total time: ${totalTime} minutes`)
     console.log(
-      `📈 Success rate: ${(
-        (this.sentRecords / this.totalRecords) *
-        100
-      ).toFixed(1)}%`
+      `📈 Success rate: ${
+        processedRecords > 0
+          ? ((this.sentRecords / processedRecords) * 100).toFixed(1)
+          : '0.0'
+      }%`
     )
 
     if (this.errors.length > 0) {
@@ -346,6 +674,7 @@ class WebhookSender {
       this.getMaxSendRate()
       this.selectCsvFile()
       this.parseCsvFile()
+      this.getConversionTimeConfigurationIfAvailable()
       await this.sendAllRecords()
 
       console.log('\n🎉 Process completed!')
