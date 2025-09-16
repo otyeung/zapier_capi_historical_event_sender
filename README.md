@@ -140,15 +140,15 @@ Navigate to [https://workbench.developerforce.com/login.php](https://workbench.d
 
 ```sql
 SELECT
-    Email,              -- Lead's email address
-    FirstName,          -- Lead's first name
-    LastName,           -- Lead's last name
-    Title,              -- Lead's job title
-    Company,            -- Company the lead is associated with
-    CountryCode__c,     -- Custom field: country code of the lead
-    LastModifiedDate    -- Last date/time the lead record was updated
+    Email,
+    FirstName,
+    LastName,
+    Title,
+    Company,
+    CountryCode__c,
+    LastModifiedDate
 FROM
-    Lead                -- Lead object
+    Lead
 ```
 
 **Note:** You can modify the above as appropriate. `LastModifiedDate` will export in ISO-8601 date time format.
@@ -159,17 +159,17 @@ FROM
 
 ```sql
 SELECT
-    ContactEmail__c,        -- Custom field: Contact's email address related to the opportunity
-    ContactFirstName__c,    -- Custom field: Contact's first name
-    ContactLastName__c,     -- Custom field: Contact's last name
-    ContactTitle__c,        -- Custom field: Contact's job title
-    ContactAccountName__c,  -- Custom field: Contact's account/company name
-    ContactCountryCode__c,  -- Custom field: Contact's country code
-    CurrencyIsoCode,        -- ISO currency code (e.g., USD, EUR) for the Amount field
-    Amount,                 -- Opportunity amount (in the specified currency)
-    LastModifiedDate        -- Last date/time the opportunity record was updated
+    ContactEmail__c,
+    ContactFirstName__c,
+    ContactLastName__c,
+    ContactTitle__c,
+    ContactAccountName__c,
+    ContactCountryCode__c,
+    CurrencyIsoCode,
+    Amount,
+    LastModifiedDate
 FROM
-    Opportunity             -- Opportunity object
+    Opportunity
 ```
 
 **Note:** You can modify the above as appropriate. You need to "Activate Multiple Currencies" for your org in SFDC CRM to support currency ISO code.
